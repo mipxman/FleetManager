@@ -379,8 +379,8 @@ def view_car_html_report(car_id):
 def init_db():
     with app.app_context():
         db.create_all()
-        if not User.query.filter_by(username='nec_admin').first():
-            hashed_admin_pw = generate_password_hash('NeC2024!!', method='scrypt')
+        if not User.query.filter_by(username='admin').first():
+            hashed_admin_pw = generate_password_hash('admin2024!!', method='scrypt')
             admin_user = User(
                 username='admin',
                 password=hashed_admin_pw,
