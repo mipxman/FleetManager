@@ -1,7 +1,7 @@
 # FleetManager
 
 A lightweight, containerized web application built with Python (Flask), SQLite, and Bootstrap 5 to manage company vehicle check-outs, returns, and driver logs.
-
+> ⚡ **Powered by Gemini!** Built through interactive AI-assisted architectural design and continuous feedback loops.
 ---
 
 ## Key Features
