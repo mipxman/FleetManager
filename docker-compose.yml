@@ -4,7 +4,9 @@ services:
   web:
     build: .
     ports:
-      - "80:5000"
+      - "5002:5000"
     volumes:
       - ./database.db:/app/database.db
+      - ./static/car_images:/app/static/car_images
+      - ./static/receipt_images:/app/static/receipt_images
     restart: always

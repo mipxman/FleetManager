@@ -14,7 +14,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from datetime import datetime
 import pytz
-
+from sqlalchemy import extract
 
 # Initialize Flask App
 app = Flask(__name__)
@@ -43,6 +43,11 @@ def get_local_time():
     # Fetch local Italian time (Europe/Rome)
     rome_tz = pytz.timezone('Europe/Rome')
     return datetime.now(rome_tz)
+
+
+RECEIPT_FOLDER = 'static/receipt_images'
+app.config['RECEIPT_FOLDER'] = RECEIPT_FOLDER
+os.makedirs(RECEIPT_FOLDER, exist_ok=True)
 
 # -----------------------------------------------------------------------------
 # DATABASE MODELS
@@ -75,6 +80,7 @@ class TripLog(db.Model):
     start_km = db.Column(db.Integer, nullable=False)
     end_km = db.Column(db.Integer, nullable=True)
     destination_notes = db.Column(db.Text, nullable=True)
+    receipt_image = db.Column(db.String(200), nullable=True)
     status = db.Column(db.String(20), default='active', nullable=False)  # 'active' or 'completed'
 
 @login_manager.user_loader
@@ -201,6 +207,30 @@ def add_car():
     flash('Vehicle added to fleet successfully.', 'success')
     return redirect(url_for('admin_dashboard'))
 
+@app.route('/admin/car/edit/<int:car_id>', methods=['POST'])
+@login_required
+def edit_car(car_id):
+    if current_user.role != 'admin':
+        flash('Unauthorized action.', 'danger')
+        return redirect(url_for('user_dashboard'))
+
+    car = Car.query.get_or_404(car_id)
+    car.make_model = request.form.get('make_model')
+    car.plate_number = request.form.get('plate_number')
+    car.current_km = request.form.get('current_km', type=int)
+
+    # Handle image update if provided
+    car_image = request.files.get('car_image')
+    if car_image and car_image.filename != '':
+        filename = f"{car.plate_number}_{secure_filename(car_image.filename)}"
+        car_image.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        car.image_file = filename
+
+    db.session.commit()
+    flash(f'Vehicle "{car.make_model}" updated successfully.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+
 @app.route('/admin/delete-car/<int:car_id>')
 @login_required
 def delete_car(car_id):
@@ -217,6 +247,105 @@ def delete_car(car_id):
     db.session.commit()
     flash('Vehicle removed from fleet.', 'info')
     return redirect(url_for('admin_dashboard'))
+
+@app.route('/admin/car/assign/<int:car_id>', methods=['POST'])
+@login_required
+def assign_car(car_id):
+    if current_user.role != 'admin':
+        flash('Unauthorized action.', 'danger')
+        return redirect(url_for('user_dashboard'))
+
+    car = Car.query.get_or_404(car_id)
+    assigned_user_id = request.form.get('user_id', type=int)
+    destination_notes = request.form.get('destination_notes')
+    
+    custom_date = request.form.get('custom_date')  # Format: YYYY-MM-DD from HTML input
+    custom_time = request.form.get('custom_time')  # Format: HH:MM
+
+    if car.status != 'available':
+        flash('This vehicle is currently in use.', 'warning')
+        return redirect(url_for('admin_dashboard'))
+
+    # Parse custom start time or fallback to current local time
+    if custom_date and custom_time:
+        try:
+            start_timestamp = datetime.strptime(f"{custom_date} {custom_time}", '%Y-%m-%d %H:%M')
+            rome_tz = pytz.timezone('Europe/Rome')
+            start_timestamp = rome_tz.localize(start_timestamp)
+        except ValueError:
+            start_timestamp = get_local_time()
+    else:
+        start_timestamp = get_local_time()
+
+    trip = TripLog(
+        user_id=assigned_user_id,
+        car_id=car.id,
+        start_km=car.current_km,
+        destination_notes=destination_notes,
+        start_time=start_timestamp,
+        status='active'
+    )
+    car.status = 'in_use'
+
+    db.session.add(trip)
+    db.session.commit()
+
+    flash(f'Vehicle "{car.make_model}" assigned successfully.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/car/force-return/<int:car_id>', methods=['POST'])
+@login_required
+def admin_force_return_car(car_id):
+    if current_user.role != 'admin':
+        flash('Unauthorized action.', 'danger')
+        return redirect(url_for('user_dashboard'))
+
+    car = Car.query.get_or_404(car_id)
+    active_trip = TripLog.query.filter_by(car_id=car.id, status='active').first()
+    
+    if not active_trip:
+        flash('No active trip found for this vehicle.', 'warning')
+        return redirect(url_for('admin_dashboard'))
+
+    end_km = request.form.get('end_km', type=int)
+    receipt = request.files.get('receipt_image')
+    custom_date = request.form.get('custom_date')
+    custom_time = request.form.get('custom_time')
+
+    if not end_km or end_km < active_trip.start_km:
+        flash(f'Return KM must be greater than or equal to start KM ({active_trip.start_km} km).', 'warning')
+        return redirect(url_for('admin_dashboard'))
+
+    # Parse custom end time or fallback to current local time
+    if custom_date and custom_time:
+        try:
+            end_timestamp = datetime.strptime(f"{custom_date} {custom_time}", '%Y-%m-%d %H:%M')
+            rome_tz = pytz.timezone('Europe/Rome')
+            end_timestamp = rome_tz.localize(end_timestamp)
+        except ValueError:
+            end_timestamp = get_local_time()
+    else:
+        end_timestamp = get_local_time()
+
+    filename = None
+    if receipt and receipt.filename != '':
+        filename = f"receipt_{active_trip.id}_{secure_filename(receipt.filename)}"
+        receipt.save(os.path.join(app.config['RECEIPT_FOLDER'], filename))
+
+    active_trip.end_km = end_km
+    active_trip.end_time = end_timestamp
+    if filename:
+        active_trip.receipt_image = filename
+    active_trip.status = 'completed'
+
+    car.current_km = end_km
+    car.status = 'available'
+
+    db.session.commit()
+    flash(f'Vehicle "{car.make_model}" return completed by Admin.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
 
 @app.route('/admin/reset-password/<int:user_id>', methods=['POST'])
 @login_required
@@ -236,6 +365,8 @@ def reset_password(user_id):
     db.session.commit()
     flash(f'Password for user "{user.username}" updated successfully.', 'success')
     return redirect(url_for('admin_dashboard'))
+
+
 
 @app.route('/admin/delete-user/<int:user_id>', methods=['POST'])
 @login_required
@@ -263,6 +394,7 @@ def delete_user(user_id):
     
     flash(f'User "{user.username}" has been removed.', 'info')
     return redirect(url_for('admin_dashboard'))
+
 # -----------------------------------------------------------------------------
 # USER DASHBOARD & TRIP ROUTES
 # -----------------------------------------------------------------------------
@@ -300,27 +432,35 @@ def checkout_car(car_id):
     flash(f'Vehicle {car.make_model} successfully checked out.', 'success')
     return redirect(url_for('user_dashboard'))
 
-@app.route('/return/<int:trip_id>', methods=['POST'])
+@app.route('/user/return/<int:trip_id>', methods=['POST'])
 @login_required
 def return_car(trip_id):
     trip = TripLog.query.get_or_404(trip_id)
-    
-    if trip.user_id != current_user.id and current_user.role != 'admin':
+    if trip.user_id != current_user.id:
         flash('Unauthorized action.', 'danger')
         return redirect(url_for('user_dashboard'))
 
-    end_km = int(request.form.get('end_km'))
-    if end_km < trip.start_km:
-        flash('Return odometer reading cannot be less than starting reading.', 'danger')
+    end_km = request.form.get('end_km', type=int)
+    receipt = request.files.get('receipt_image')
+
+    if not end_km or end_km < trip.start_km:
+        flash('Return KM must be greater than or equal to start KM.', 'warning')
         return redirect(url_for('user_dashboard'))
+
+    filename = None
+    if receipt and receipt.filename != '':
+        filename = f"receipt_{trip.id}_{secure_filename(receipt.filename)}"
+        receipt.save(os.path.join(app.config['RECEIPT_FOLDER'], filename))
 
     trip.end_km = end_km
     trip.end_time = get_local_time()
+    trip.receipt_image = filename
     trip.status = 'completed'
 
+    # Update car status and current KM
     car = Car.query.get(trip.car_id)
-    car.status = 'available'
     car.current_km = end_km
+    car.status = 'available'
 
     db.session.commit()
     flash('Vehicle returned successfully.', 'success')
@@ -368,9 +508,25 @@ def view_car_html_report(car_id):
         return "Unauthorized", 403
 
     car = Car.query.get_or_404(car_id)
-    logs = db.session.query(TripLog, User)\
+    
+    # Get selected month and year from query parameters (default to current local date if not specified)
+    selected_month = request.args.get('month', type=int)
+    selected_year = request.args.get('year', type=int)
+
+    # Base query for trip logs
+    query = db.session.query(TripLog, User)\
         .join(User, TripLog.user_id == User.id)\
-        .filter(TripLog.car_id == car_id).all()
+        .filter(TripLog.car_id == car_id)
+
+    # Apply year filter if present
+    if selected_year:
+        query = query.filter(extract('year', TripLog.start_time) == selected_year)
+
+    # Apply month filter if present
+    if selected_month:
+        query = query.filter(extract('month', TripLog.start_time) == selected_month)
+
+    logs = query.order_by(TripLog.start_time.desc()).all()
 
     html_template = """
     {% extends "base.html" %}
@@ -379,6 +535,40 @@ def view_car_html_report(car_id):
         <h4 class="mb-0">Report for {{ car.make_model }} ({{ car.plate_number }})</h4>
         <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary btn-sm">Back to Dashboard</a>
     </div>
+
+    <!-- Date Filter Bar -->
+    <div class="card shadow-sm mb-3">
+        <div class="card-body p-3">
+            <form method="GET" action="{{ url_for('view_car_html_report', car_id=car.id) }}" class="row g-2 align-items-center">
+                <div class="col-12 col-md-4">
+                    <label class="form-label small fw-bold mb-1">Month</label>
+                    <select name="month" class="form-select form-select-sm">
+                        <option value="">All Months</option>
+                        {% for m in range(1, 13) %}
+                        <option value="{{ m }}" {% if selected_month == m %}selected{% endif %}>
+                            {{ ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][m-1] }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-12 col-md-4">
+                    <label class="form-label small fw-bold mb-1">Year</label>
+                    <select name="year" class="form-select form-select-sm">
+                        <option value="">All Years</option>
+                        {% for y in range(2026, 2036) %}
+                        <option value="{{ y }}" {% if selected_year == y %}selected{% endif %}>{{ y }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-12 col-md-4 d-flex gap-2 mt-md-4">
+                    <button type="submit" class="btn btn-dark btn-sm w-100">Filter Report</button>
+                    <a href="{{ url_for('view_car_html_report', car_id=car.id) }}" class="btn btn-outline-secondary btn-sm w-100">Reset</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Report Table -->
     <div class="card shadow-sm">
         <div class="card-body p-0">
             <div class="table-responsive">
@@ -392,6 +582,7 @@ def view_car_html_report(car_id):
                             <th>Start KM</th>
                             <th>End KM</th>
                             <th>Distance</th>
+                            <th>Receipt / Bill</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -404,10 +595,19 @@ def view_car_html_report(car_id):
                             <td>{{ log.start_km }} km</td>
                             <td>{{ log.end_km ~ ' km' if log.end_km else 'N/A' }}</td>
                             <td>{{ (log.end_km - log.start_km) ~ ' km' if log.end_km else 'N/A' }}</td>
+                            <td>
+                                {% if log.receipt_image %}
+                                <a href="{{ url_for('static', filename='receipt_images/' ~ log.receipt_image) }}" target="_blank" class="btn btn-outline-dark btn-sm">
+                                    View Receipt
+                                </a>
+                                {% else %}
+                                <span class="text-muted small">No Receipt</span>
+                                {% endif %}
+                            </td>
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="7" class="text-center py-3 text-muted">No trip logs found.</td>
+                            <td colspan="8" class="text-center py-3 text-muted">No trip logs found for the selected period.</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -417,7 +617,8 @@ def view_car_html_report(car_id):
     </div>
     {% endblock %}
     """
-    return render_template_string(html_template, car=car, logs=logs)
+    return render_template_string(html_template, car=car, logs=logs, selected_month=selected_month, selected_year=selected_year)
+
 # -----------------------------------------------------------------------------
 # APP INITIALIZATION & DEFAULT SEED DATA
 # -----------------------------------------------------------------------------
@@ -425,7 +626,7 @@ def init_db():
     with app.app_context():
         db.create_all()
         if not User.query.filter_by(username='admin').first():
-            hashed_admin_pw = generate_password_hash('admin2024!!', method='scrypt')
+            hashed_admin_pw = generate_password_hash('admin123', method='scrypt')
             admin_user = User(
                 username='admin',
                 password=hashed_admin_pw,
