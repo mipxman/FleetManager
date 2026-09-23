@@ -8,20 +8,24 @@
     <div class="card-header bg-warning text-dark fw-bold" data-i18n="active_returns">Active Returns</div>
     <div class="card-body p-2">
         {% for trip in active_trips %}
-        <form action="{{ url_for('return_car', trip_id=trip.id) }}" method="POST" class="p-3 border rounded bg-white mb-2">
+        <form action="{{ url_for('return_car', trip_id=trip.id) }}" method="POST" enctype="multipart/form-data" class="p-3 border rounded bg-white mb-2">
             <div class="row g-2 align-items-center">
-                <div class="col-12 col-md-4">
+                <div class="col-12 col-md-3">
                     <strong>{{ trip.car.make_model }}</strong>
                     <span class="badge bg-light text-dark border">{{ trip.car.plate_number }}</span>
                     {% if trip.destination_notes %}
                     <div class="text-primary small mt-1">📍 Destination: {{ trip.destination_notes }}</div>
                     {% endif %}
                 </div>
-                <div class="col-12 col-md-4">
+                <div class="col-12 col-md-3">
                     <label class="form-label mb-0 small text-muted" data-i18n="return_odometer">Return Odometer (KM)</label>
                     <input type="number" name="end_km" class="form-control form-control-sm" min="{{ trip.start_km }}" required placeholder="Start: {{ trip.start_km }}">
                 </div>
-                <div class="col-12 col-md-4">
+                <div class="col-12 col-md-3">
+                    <label class="form-label mb-0 small text-muted" data-i18n="receipt_upload">Receipt / Fuel Bill (Optional)</label>
+                    <input type="file" name="receipt_image" class="form-control form-control-sm" accept="image/*">
+                </div>
+                <div class="col-12 col-md-3 mt-md-4">
                     <button type="submit" class="btn btn-success btn-sm w-100" data-i18n="return_vehicle">Return Vehicle</button>
                 </div>
             </div>
