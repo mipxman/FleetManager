@@ -232,11 +232,36 @@ def reset_password(user_id):
         flash('Password cannot be empty.', 'warning')
         return redirect(url_for('admin_dashboard'))
 
-    # Hash and update password
     user.password = generate_password_hash(new_password, method='scrypt')
     db.session.commit()
-    
     flash(f'Password for user "{user.username}" updated successfully.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/admin/delete-user/<int:user_id>', methods=['POST'])
+@login_required
+def delete_user(user_id):
+    if current_user.role != 'admin':
+        flash('Unauthorized action.', 'danger')
+        return redirect(url_for('user_dashboard'))
+    
+    if user_id == current_user.id:
+        flash('You cannot delete your own active admin account.', 'warning')
+        return redirect(url_for('admin_dashboard'))
+
+    user = User.query.get_or_404(user_id)
+    
+    # Prevent deleting user if they have active checked-out cars
+    active_trips = TripLog.query.filter_by(user_id=user.id, status='active').first()
+    if active_trips:
+        flash(f'Cannot delete user "{user.username}" because they currently have an active vehicle checked out.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    # Clear completed trip history and remove user
+    TripLog.query.filter_by(user_id=user.id).delete()
+    db.session.delete(user)
+    db.session.commit()
+    
+    flash(f'User "{user.username}" has been removed.', 'info')
     return redirect(url_for('admin_dashboard'))
 # -----------------------------------------------------------------------------
 # USER DASHBOARD & TRIP ROUTES
