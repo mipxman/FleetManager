@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<h3 class="mb-3" data-i18n="driver_portal">Driver Portal</h3>
+
+<!-- Active Checked-out Vehicles -->
+{% if active_trips %}
+<div class="card border-warning shadow-sm mb-4">
+    <div class="card-header bg-warning text-dark fw-bold" data-i18n="active_returns">Active Returns</div>
+    <div class="card-body p-2">
+        {% for trip in active_trips %}
+        <form action="{{ url_for('return_car', trip_id=trip.id) }}" method="POST" class="p-3 border rounded bg-white mb-2">
+            <div class="row g-2 align-items-center">
+                <div class="col-12 col-md-4">
+                    <strong>{{ trip.car.make_model }}</strong>
+                    <span class="badge bg-light text-dark border">{{ trip.car.plate_number }}</span>
+                    {% if trip.destination_notes %}
+                    <div class="text-primary small mt-1">📍 Destination: {{ trip.destination_notes }}</div>
+                    {% endif %}
+                </div>
+                <div class="col-12 col-md-4">
+                    <label class="form-label mb-0 small text-muted" data-i18n="return_odometer">Return Odometer (KM)</label>
+                    <input type="number" name="end_km" class="form-control form-control-sm" min="{{ trip.start_km }}" required placeholder="Start: {{ trip.start_km }}">
+                </div>
+                <div class="col-12 col-md-4">
+                    <button type="submit" class="btn btn-success btn-sm w-100" data-i18n="return_vehicle">Return Vehicle</button>
+                </div>
+            </div>
+        </form>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Available Fleet Section -->
+<div class="card shadow-sm">
+    <div class="card-header bg-primary text-white fw-bold" data-i18n="available_vehicles">Available Vehicles</div>
+    <div class="card-body p-2">
+        {% for car in available_cars %}
+        <div class="border rounded bg-white p-3 mb-2 shadow-sm">
+            <div class="d-flex align-items-center mb-2">
+                <img src="{{ url_for('static', filename='car_images/' ~ car.image_file) }}" 
+                     alt="Car" style="width: 60px; height: 45px; object-fit: cover;" class="rounded border me-3">
+                <div>
+                    <h6 class="mb-0">{{ car.make_model }}</h6>
+                    <span class="badge bg-light text-dark border">{{ car.plate_number }}</span>
+                    <small class="text-muted ms-2">{{ car.current_km }} km</small>
+                </div>
+            </div>
+            
+            <form action="{{ url_for('checkout_car', car_id=car.id) }}" method="POST">
+                <div class="row g-2">
+                    <div class="col-12 col-md-4">
+                        <input type="number" name="start_km" class="form-control form-control-sm" value="{{ car.current_km }}" required placeholder="Start KM" data-i18n-placeholder="start_km">
+                    </div>
+                    <div class="col-12 col-md-5">
+                        <input type="text" name="destination_notes" class="form-control form-control-sm" placeholder="Where are you going?" data-i18n-placeholder="where_going" required>
+                    </div>
+                    <div class="col-12 col-md-3">
+                        <button type="submit" class="btn btn-primary btn-sm w-100" data-i18n="check_out">Check Out</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+        {% else %}
+        <div class="text-center py-3 text-muted" data-i18n="no_vehicles">No vehicles available.</div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

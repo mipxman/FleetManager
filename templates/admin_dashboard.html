@@ -1,1 +1,125 @@
+{% extends "base.html" %}
+{% block content %}
+<h3 class="mb-3" data-i18n="admin_dashboard">Admin Dashboard</h3>
 
+<div class="row">
+    <!-- User Creation Form -->
+    <div class="col-12 col-md-5 mb-4">
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-secondary text-white fw-bold" data-i18n="add_user">
+                Add New User
+            </div>
+            <div class="card-body">
+                <form action="{{ url_for('add_user') }}" method="POST">
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
+                            <input type="text" name="first_name" class="form-control form-control-sm" placeholder="First Name" data-i18n-placeholder="first_name" required>
+                        </div>
+                        <div class="col-6">
+                            <input type="text" name="last_name" class="form-control form-control-sm" placeholder="Last Name" data-i18n-placeholder="last_name" required>
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <input type="text" name="username" class="form-control form-control-sm" placeholder="Username" data-i18n-placeholder="username" required>
+                    </div>
+                    <div class="mb-2">
+                        <input type="password" name="password" class="form-control form-control-sm" placeholder="Password" data-i18n-placeholder="password" required>
+                    </div>
+                    <div class="mb-3">
+                        <select name="role" class="form-select form-select-sm">
+                            <option value="user" data-i18n="role_user">Normal User</option>
+                            <option value="admin" data-i18n="role_admin">Admin</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-secondary btn-sm w-100" data-i18n="register_user">Register User</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Car Management Form -->
+    <div class="col-12 col-md-7 mb-4">
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-secondary text-white fw-bold" data-i18n="add_vehicle">
+                Add New Vehicle
+            </div>
+            <div class="card-body">
+                <form action="{{ url_for('add_car') }}" method="POST" enctype="multipart/form-data" class="row g-2">
+                    <div class="col-12 col-md-6">
+                        <input type="text" name="make_model" class="form-control form-control-sm" placeholder="Make & Model" data-i18n-placeholder="modelo" required>
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <input type="text" name="plate_number" class="form-control form-control-sm" placeholder="Targa" data-i18n-placeholder="targa" required>
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <input type="number" name="current_km" class="form-control form-control-sm" placeholder="Initial KM" data-i18n-placeholder="km inizi" required>
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <input type="file" name="car_image" class="form-control form-control-sm" accept="image/*">
+                    </div>
+                    <div class="col-12 mt-3">
+                        <button type="submit" class="btn btn-secondary btn-sm w-100" data-i18n="add_to_fleet">Add Vehicle to Fleet</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Vehicle Fleet List & Reports -->
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-dark text-white fw-bold" data-i18n="fleet_reports">
+        Vehicle Fleet & Export Reports
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-striped align-middle mb-0 text-nowrap">
+                <thead class="table-light">
+                    <tr>
+                        <th>ID</th>
+                        <th data-i18n="image">Image</th>
+                        <th data-i18n="vehicle">Vehicle</th>
+                        <th data-i18n="plate">Plate</th>
+                        <th data-i18n="current_km">Current KM</th>
+                        <th data-i18n="status">Status</th>
+                        <th data-i18n="export_report">Export Report</th>
+                        <th data-i18n="action">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for car in cars %}
+                    <tr>
+                        <td>{{ car.id }}</td>
+                        <td>
+                            <img src="{{ url_for('static', filename='car_images/' ~ car.image_file) }}"
+                                 alt="Car Image" style="width: 50px; height: 35px; object-fit: cover;" class="rounded border">
+                        </td>
+                        <td><strong>{{ car.make_model }}</strong></td>
+                        <td><span class="badge bg-light text-dark border">{{ car.plate_number }}</span></td>
+                        <td>{{ car.current_km }} km</td>
+                        <td>
+                            {% if car.status == 'available' %}
+                            <span class="badge bg-success" data-i18n="status_available">Available</span>
+                            {% else %}
+                            <span class="badge bg-warning text-dark" data-i18n="status_in_use">In Use</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="{{ url_for('export_car_csv', car_id=car.id) }}" class="btn btn-outline-primary btn-sm">CSV</a>
+                            <a href="{{ url_for('view_car_html_report', car_id=car.id) }}" class="btn btn-outline-info btn-sm">HTML</a>
+                        </td>
+                        <td>
+                            <a href="{{ url_for('delete_car', car_id=car.id) }}" class="btn btn-outline-danger btn-sm" onclick="return confirm('Are you sure?')" data-i18n="remove">Remove</a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="8" class="text-center py-3 text-muted" data-i18n="no_vehicles">No vehicles available.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
