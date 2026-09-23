@@ -218,6 +218,26 @@ def delete_car(car_id):
     flash('Vehicle removed from fleet.', 'info')
     return redirect(url_for('admin_dashboard'))
 
+@app.route('/admin/reset-password/<int:user_id>', methods=['POST'])
+@login_required
+def reset_password(user_id):
+    if current_user.role != 'admin':
+        flash('Unauthorized action.', 'danger')
+        return redirect(url_for('user_dashboard'))
+    
+    user = User.query.get_or_404(user_id)
+    new_password = request.form.get('new_password')
+    
+    if not new_password:
+        flash('Password cannot be empty.', 'warning')
+        return redirect(url_for('admin_dashboard'))
+
+    # Hash and update password
+    user.password = generate_password_hash(new_password, method='scrypt')
+    db.session.commit()
+    
+    flash(f'Password for user "{user.username}" updated successfully.', 'success')
+    return redirect(url_for('admin_dashboard'))
 # -----------------------------------------------------------------------------
 # USER DASHBOARD & TRIP ROUTES
 # -----------------------------------------------------------------------------
