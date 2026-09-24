@@ -1,643 +1,608 @@
 import os
+import uuid
 from datetime import datetime
-import pandas as pd
-from flask import (
-    Flask, render_template, redirect, url_for,
-    request, flash, send_file, render_template_string
-)
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import (
-    LoginManager, UserMixin, login_user,
-    logout_user, login_required, current_user
-)
-from werkzeug.security import generate_password_hash, check_password_hash
+from zoneinfo import ZoneInfo
 from werkzeug.utils import secure_filename
-from datetime import datetime
-import pytz
-from sqlalchemy import extract
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from sqlalchemy import or_, text
+import pandas as pd
 
-# Initialize Flask App
+# --- ABSOLUTE BASE PATH CONFIGURATION ---
+basedir = os.path.abspath(os.path.dirname(__file__))
+
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'super-secret-key-change-this-in-production'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
+app.config['SECRET_KEY'] = 'MY_SECURE_KEY2026'
+
+# Lock SQLite directly to /app/warehouse.db on the mounted host volume
+db_path = os.path.join(basedir, 'warehouse.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-UPLOAD_FOLDER = 'static/car_images'
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+# File uploads directory
+UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'pdf'}
 
-
-db = SQLAlchemy(app)
-
-# Login Manager Setup
-login_manager = LoginManager(app)
-login_manager.login_view = 'login'
-login_manager.login_message_category = 'warning'
-
-
-# Helper function to check file extension
-def allowed_file(filename):  # <-- ADD THIS FUNCTION
+def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def get_local_time():
-    # Fetch local Italian time (Europe/Rome)
-    rome_tz = pytz.timezone('Europe/Rome')
-    return datetime.now(rome_tz)
+def save_attachment(file_obj):
+    if file_obj and file_obj.filename != '' and allowed_file(file_obj.filename):
+        unique_name = f"{uuid.uuid4().hex[:10]}_{secure_filename(file_obj.filename)}"
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_name)
+        file_obj.save(file_path)
+        return unique_name
+    return None
 
-
-RECEIPT_FOLDER = 'static/receipt_images'
-app.config['RECEIPT_FOLDER'] = RECEIPT_FOLDER
-os.makedirs(RECEIPT_FOLDER, exist_ok=True)
-
-# -----------------------------------------------------------------------------
-# DATABASE MODELS
-# -----------------------------------------------------------------------------
-class User(UserMixin, db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(50), unique=True, nullable=False)
-    password = db.Column(db.String(255), nullable=False)
-    first_name = db.Column(db.String(50), nullable=False)
-    last_name = db.Column(db.String(50), nullable=False)
-    role = db.Column(db.String(10), default='user')  # 'admin' or 'user'
-    trips = db.relationship('TripLog', backref='user', lazy=True)
-
-class Car(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    make_model = db.Column(db.String(100), nullable=False)
-    plate_number = db.Column(db.String(20), unique=True, nullable=False)
-    current_km = db.Column(db.Integer, default=0, nullable=False)
-    status = db.Column(db.String(20), default='available', nullable=False)  # 'available' or 'in_use'
-    image_file = db.Column(db.String(100), default='default_car.jpg')
-    trips = db.relationship('TripLog', backref='car', lazy=True)
-
-class TripLog(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    car_id = db.Column(db.Integer, db.ForeignKey('car.id'), nullable=False)
-    #start_time = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    start_time = db.Column(db.DateTime, default=get_local_time, nullable=False)
-    end_time = db.Column(db.DateTime, nullable=True)
-    start_km = db.Column(db.Integer, nullable=False)
-    end_km = db.Column(db.Integer, nullable=True)
-    destination_notes = db.Column(db.Text, nullable=True)
-    receipt_image = db.Column(db.String(200), nullable=True)
-    status = db.Column(db.String(20), default='active', nullable=False)  # 'active' or 'completed'
+# --- DATABASE & LOGIN INITIALIZATION ---
+db = SQLAlchemy(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
 
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# -----------------------------------------------------------------------------
-# AUTHENTICATION ROUTES
-# -----------------------------------------------------------------------------
+def rome_now():
+    return datetime.now(ZoneInfo("Europe/Rome"))
+
+# --- MODELS ---
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password = db.Column(db.String(200), nullable=False)
+
+class Category(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(50), nullable=False)
+    vendor = db.Column(db.String(50), nullable=False)
+    model = db.Column(db.String(50), nullable=False)
+
+class PropertyClient(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), unique=True, nullable=False)
+
+class Item(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    serial_number = db.Column(db.String(100), unique=True, nullable=False)
+    category_id = db.Column(db.Integer, db.ForeignKey('category.id'), nullable=False)
+    property_id = db.Column(db.Integer, db.ForeignKey('property_client.id'), nullable=True)
+    status = db.Column(db.String(20), default='IN_STOCK')
+
+    category_rel = db.relationship('Category', backref=db.backref('items', lazy=True))
+    owner_property = db.relationship('PropertyClient', backref=db.backref('items', lazy=True))
+
+class Transaction(db.Model):
+    __tablename__ = 'transaction'
+    __table_args__ = {'extend_existing': True}
+
+    id = db.Column(db.Integer, primary_key=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('item.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    action = db.Column(db.String(20), nullable=False)
+    timestamp = db.Column(db.DateTime, default=rome_now)
+    comment = db.Column(db.String(255), nullable=True)
+    attachment = db.Column(db.String(255), nullable=True)
+
+    item = db.relationship('Item', backref=db.backref('transactions', lazy=True))
+    user = db.relationship('User', backref=db.backref('transactions', lazy=True))
+
+# --- AUTO MIGRATION & INITIAL DATA ---
+with app.app_context():
+    db.create_all()
+    try:
+        db.session.execute(text('ALTER TABLE "transaction" ADD COLUMN attachment TEXT'))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    if not User.query.filter_by(username='admin').first():
+        default_admin = User(username='admin', password=generate_password_hash('admin123'))
+        db.session.add(default_admin)
+        db.session.commit()
+
+# --- ROUTES ---
+
+@app.route('/uploads/<path:filename>')
+@login_required
+def download_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
 @app.route('/')
+@login_required
 def index():
-    if current_user.is_authenticated:
-        if current_user.role == 'admin':
-            return redirect(url_for('admin_dashboard'))
-        return redirect(url_for('user_dashboard'))
-    return redirect(url_for('login'))
+    categories = Category.query.all()
+    
+    category_counts = []
+    for cat in categories:
+        in_stock_cnt = Item.query.filter_by(category_id=cat.id, status='IN_STOCK').count()
+        exited_cnt = Item.query.filter_by(category_id=cat.id, status='EXITED').count()
+        category_counts.append({
+            'vendor': cat.vendor,
+            'name': cat.name,
+            'model': cat.model,
+            'in_stock': in_stock_cnt,
+            'exited': exited_cnt
+        })
+
+    metrics = {
+        'total_items': Item.query.count(),
+        'total_in_stock': Item.query.filter_by(status='IN_STOCK').count(),
+        'total_exited': Item.query.filter_by(status='EXITED').count(),
+        'total_categories': len(categories)
+    }
+
+    recent_transactions = Transaction.query.order_by(Transaction.timestamp.desc()).limit(10).all()
+
+    return render_template(
+        'index.html',
+        metrics=metrics,
+        recent_transactions=recent_transactions,
+        category_counts=category_counts
+    )
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if current_user.is_authenticated:
-        if current_user.role == 'admin':
-            return redirect(url_for('admin_dashboard'))
-        return redirect(url_for('user_dashboard'))
-
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
-        
         user = User.query.filter_by(username=username).first()
-        
+
         if user and check_password_hash(user.password, password):
             login_user(user)
-            flash(f'Welcome back, {user.first_name}!', 'success')
-            if user.role == 'admin':
-                return redirect(url_for('admin_dashboard'))
-            return redirect(url_for('user_dashboard'))
+            return redirect(url_for('index'))
         else:
-            flash('Invalid username or password.', 'danger')
-
+            flash('Invalid username or password!')
     return render_template('login.html')
 
 @app.route('/logout')
 @login_required
 def logout():
     logout_user()
-    flash('You have been logged out successfully.', 'info')
     return redirect(url_for('login'))
 
-# -----------------------------------------------------------------------------
-# ADMIN ROUTES
-# -----------------------------------------------------------------------------
-@app.route('/admin')
+@app.route('/transaction', methods=['GET', 'POST'])
 @login_required
-def admin_dashboard():
-    if current_user.role != 'admin':
-        flash('Access denied. Admin privileges required.', 'danger')
-        return redirect(url_for('user_dashboard'))
-    
-    cars = Car.query.all()
-    users = User.query.all()
-    return render_template('admin_dashboard.html', cars=cars, users=users)
+def transaction():
+    if request.method == 'POST':
+        action = request.form.get('action')
+        serial_number = request.form.get('serial_number', '').strip()
+        category_id = request.form.get('category_id')
+        property_id = request.form.get('property_id')
+        comment = request.form.get('comment', '').strip()
+        attachment_file = request.files.get('attachment')
+        custom_time_str = request.form.get('custom_timestamp')
 
-@app.route('/admin/add-user', methods=['POST'])
+        if not serial_number:
+            flash('Error: Serial number is required!')
+            return redirect(url_for('transaction'))
+
+        if custom_time_str:
+            try:
+                event_timestamp = datetime.strptime(custom_time_str, '%Y-%m-%dT%H:%M')
+            except ValueError:
+                event_timestamp = rome_now()
+        else:
+            event_timestamp = rome_now()
+
+        uploaded_filename = save_attachment(attachment_file)
+        item = Item.query.filter_by(serial_number=serial_number).first()
+
+        if action == 'ENTRANCE':
+            if item and item.status == 'IN_STOCK':
+                flash(f'Item {serial_number} is ALREADY IN STOCK!')
+                return redirect(url_for('transaction'))
+            
+            if not item:
+                if not category_id or not category_id.isdigit():
+                    flash('Error: Model/Category selection required for new item!')
+                    return redirect(url_for('transaction'))
+                item = Item(serial_number=serial_number, category_id=int(category_id), status='IN_STOCK')
+                db.session.add(item)
+            else:
+                item.status = 'IN_STOCK'
+            
+            if property_id and property_id.isdigit():
+                item.property_id = int(property_id)
+
+        elif action == 'EXIT':
+            if not item or item.status == 'EXITED':
+                flash(f'Error: Item {serial_number} is not in stock!')
+                return redirect(url_for('transaction'))
+            item.status = 'EXITED'
+
+        tx = Transaction(
+            item=item, 
+            user_id=current_user.id, 
+            action=action, 
+            comment=comment,
+            attachment=uploaded_filename,
+            timestamp=event_timestamp
+        )
+        db.session.add(tx)
+        db.session.commit()
+
+        flash(f'Movement logged for serial: {serial_number}')
+        return redirect(url_for('transaction'))
+
+    categories = Category.query.all()
+    properties = PropertyClient.query.all()
+    return render_template('log_transaction.html', categories=categories, properties=properties)
+
+@app.route('/report')
 @login_required
-def add_user():
-    if current_user.role != 'admin':
-        return redirect(url_for('user_dashboard'))
-    
-    username = request.form.get('username')
-    password = request.form.get('password')
-    first_name = request.form.get('first_name')
-    last_name = request.form.get('last_name')
-    role = request.form.get('role')
+def report():
+    selected_model = request.args.get('model_filter', '')
+    selected_property = request.args.get('property_filter', '')
+    search_query = request.args.get('search_query', '').strip()
 
-    if User.query.filter_by(username=username).first():
-        flash('Username already exists.', 'warning')
-        return redirect(url_for('admin_dashboard'))
+    query = Item.query.outerjoin(Category).outerjoin(PropertyClient).outerjoin(Transaction)
 
-    hashed_pw = generate_password_hash(password, method='scrypt')
-    new_user = User(
-        username=username,
-        password=hashed_pw,
-        first_name=first_name,
-        last_name=last_name,
-        role=role
-    )
-    db.session.add(new_user)
-    db.session.commit()
-    flash(f'User "{username}" created successfully.', 'success')
-    return redirect(url_for('admin_dashboard'))
+    if selected_model:
+        query = query.filter(Category.model == selected_model)
+    if selected_property and selected_property.isdigit():
+        query = query.filter(Item.property_id == int(selected_property))
 
-@app.route('/admin/add-car', methods=['POST'])
-@login_required
-def add_car():
-    if current_user.role != 'admin':
-        return redirect(url_for('user_dashboard'))
-    
-    make_model = request.form.get('make_model')
-    plate_number = request.form.get('plate_number')
-    current_km = int(request.form.get('current_km', 0))
+    if search_query:
+        search_pattern = f'%{search_query}%'
+        query = query.filter(
+            or_(
+                Item.serial_number.ilike(search_pattern),
+                Item.status.ilike(search_pattern),
+                Category.name.ilike(search_pattern),
+                Category.vendor.ilike(search_pattern),
+                Category.model.ilike(search_pattern),
+                PropertyClient.name.ilike(search_pattern),
+                Transaction.comment.ilike(search_pattern)
+            )
+        )
 
-    if Car.query.filter_by(plate_number=plate_number).first():
-        flash('A vehicle with this plate number already exists.', 'warning')
-        return redirect(url_for('admin_dashboard'))
+    filtered_items = query.distinct().all()
 
-    # Handle Uploaded Image
-    image_filename = 'default_car.jpg'
-    if 'car_image' in request.files:
-        file = request.files['car_image']
-        if file and allowed_file(file.filename):
-            filename = secure_filename(f"{plate_number}_{file.filename}")
-            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            image_filename = filename
+    enriched_items = []
+    for item in filtered_items:
+        entrance_tx = Transaction.query.filter_by(item_id=item.id, action='ENTRANCE').order_by(Transaction.timestamp.asc()).first()
+        exit_tx = Transaction.query.filter_by(item_id=item.id, action='EXIT').order_by(Transaction.timestamp.desc()).first()
+        latest_tx = Transaction.query.filter_by(item_id=item.id).order_by(Transaction.timestamp.desc()).first()
 
-    new_car = Car(
-        make_model=make_model, 
-        plate_number=plate_number, 
-        current_km=current_km,
-        image_file=image_filename
-    )
-    db.session.add(new_car)
-    db.session.commit()
-    flash('Vehicle added to fleet successfully.', 'success')
-    return redirect(url_for('admin_dashboard'))
-
-@app.route('/admin/car/edit/<int:car_id>', methods=['POST'])
-@login_required
-def edit_car(car_id):
-    if current_user.role != 'admin':
-        flash('Unauthorized action.', 'danger')
-        return redirect(url_for('user_dashboard'))
-
-    car = Car.query.get_or_404(car_id)
-    car.make_model = request.form.get('make_model')
-    car.plate_number = request.form.get('plate_number')
-    car.current_km = request.form.get('current_km', type=int)
-
-    # Handle image update if provided
-    car_image = request.files.get('car_image')
-    if car_image and car_image.filename != '':
-        filename = f"{car.plate_number}_{secure_filename(car_image.filename)}"
-        car_image.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-        car.image_file = filename
-
-    db.session.commit()
-    flash(f'Vehicle "{car.make_model}" updated successfully.', 'success')
-    return redirect(url_for('admin_dashboard'))
-
-
-@app.route('/admin/delete-car/<int:car_id>')
-@login_required
-def delete_car(car_id):
-    if current_user.role != 'admin':
-        return redirect(url_for('user_dashboard'))
-    
-    car = Car.query.get_or_404(car_id)
-    if car.status == 'in_use':
-        flash('Cannot delete a vehicle that is currently checked out.', 'danger')
-        return redirect(url_for('admin_dashboard'))
-
-    TripLog.query.filter_by(car_id=car.id).delete()
-    db.session.delete(car)
-    db.session.commit()
-    flash('Vehicle removed from fleet.', 'info')
-    return redirect(url_for('admin_dashboard'))
-
-@app.route('/admin/car/assign/<int:car_id>', methods=['POST'])
-@login_required
-def assign_car(car_id):
-    if current_user.role != 'admin':
-        flash('Unauthorized action.', 'danger')
-        return redirect(url_for('user_dashboard'))
-
-    car = Car.query.get_or_404(car_id)
-    assigned_user_id = request.form.get('user_id', type=int)
-    destination_notes = request.form.get('destination_notes')
-    
-    custom_date = request.form.get('custom_date')  # Format: YYYY-MM-DD from HTML input
-    custom_time = request.form.get('custom_time')  # Format: HH:MM
-
-    if car.status != 'available':
-        flash('This vehicle is currently in use.', 'warning')
-        return redirect(url_for('admin_dashboard'))
-
-    # Parse custom start time or fallback to current local time
-    if custom_date and custom_time:
-        try:
-            start_timestamp = datetime.strptime(f"{custom_date} {custom_time}", '%Y-%m-%d %H:%M')
-            rome_tz = pytz.timezone('Europe/Rome')
-            start_timestamp = rome_tz.localize(start_timestamp)
-        except ValueError:
-            start_timestamp = get_local_time()
-    else:
-        start_timestamp = get_local_time()
-
-    trip = TripLog(
-        user_id=assigned_user_id,
-        car_id=car.id,
-        start_km=car.current_km,
-        destination_notes=destination_notes,
-        start_time=start_timestamp,
-        status='active'
-    )
-    car.status = 'in_use'
-
-    db.session.add(trip)
-    db.session.commit()
-
-    flash(f'Vehicle "{car.make_model}" assigned successfully.', 'success')
-    return redirect(url_for('admin_dashboard'))
-
-
-@app.route('/admin/car/force-return/<int:car_id>', methods=['POST'])
-@login_required
-def admin_force_return_car(car_id):
-    if current_user.role != 'admin':
-        flash('Unauthorized action.', 'danger')
-        return redirect(url_for('user_dashboard'))
-
-    car = Car.query.get_or_404(car_id)
-    active_trip = TripLog.query.filter_by(car_id=car.id, status='active').first()
-    
-    if not active_trip:
-        flash('No active trip found for this vehicle.', 'warning')
-        return redirect(url_for('admin_dashboard'))
-
-    end_km = request.form.get('end_km', type=int)
-    receipt = request.files.get('receipt_image')
-    custom_date = request.form.get('custom_date')
-    custom_time = request.form.get('custom_time')
-
-    if not end_km or end_km < active_trip.start_km:
-        flash(f'Return KM must be greater than or equal to start KM ({active_trip.start_km} km).', 'warning')
-        return redirect(url_for('admin_dashboard'))
-
-    # Parse custom end time or fallback to current local time
-    if custom_date and custom_time:
-        try:
-            end_timestamp = datetime.strptime(f"{custom_date} {custom_time}", '%Y-%m-%d %H:%M')
-            rome_tz = pytz.timezone('Europe/Rome')
-            end_timestamp = rome_tz.localize(end_timestamp)
-        except ValueError:
-            end_timestamp = get_local_time()
-    else:
-        end_timestamp = get_local_time()
-
-    filename = None
-    if receipt and receipt.filename != '':
-        filename = f"receipt_{active_trip.id}_{secure_filename(receipt.filename)}"
-        receipt.save(os.path.join(app.config['RECEIPT_FOLDER'], filename))
-
-    active_trip.end_km = end_km
-    active_trip.end_time = end_timestamp
-    if filename:
-        active_trip.receipt_image = filename
-    active_trip.status = 'completed'
-
-    car.current_km = end_km
-    car.status = 'available'
-
-    db.session.commit()
-    flash(f'Vehicle "{car.make_model}" return completed by Admin.', 'success')
-    return redirect(url_for('admin_dashboard'))
-
-
-@app.route('/admin/reset-password/<int:user_id>', methods=['POST'])
-@login_required
-def reset_password(user_id):
-    if current_user.role != 'admin':
-        flash('Unauthorized action.', 'danger')
-        return redirect(url_for('user_dashboard'))
-    
-    user = User.query.get_or_404(user_id)
-    new_password = request.form.get('new_password')
-    
-    if not new_password:
-        flash('Password cannot be empty.', 'warning')
-        return redirect(url_for('admin_dashboard'))
-
-    user.password = generate_password_hash(new_password, method='scrypt')
-    db.session.commit()
-    flash(f'Password for user "{user.username}" updated successfully.', 'success')
-    return redirect(url_for('admin_dashboard'))
-
-
-
-@app.route('/admin/delete-user/<int:user_id>', methods=['POST'])
-@login_required
-def delete_user(user_id):
-    if current_user.role != 'admin':
-        flash('Unauthorized action.', 'danger')
-        return redirect(url_for('user_dashboard'))
-    
-    if user_id == current_user.id:
-        flash('You cannot delete your own active admin account.', 'warning')
-        return redirect(url_for('admin_dashboard'))
-
-    user = User.query.get_or_404(user_id)
-    
-    # Prevent deleting user if they have active checked-out cars
-    active_trips = TripLog.query.filter_by(user_id=user.id, status='active').first()
-    if active_trips:
-        flash(f'Cannot delete user "{user.username}" because they currently have an active vehicle checked out.', 'danger')
-        return redirect(url_for('admin_dashboard'))
-
-    # Clear completed trip history and remove user
-    TripLog.query.filter_by(user_id=user.id).delete()
-    db.session.delete(user)
-    db.session.commit()
-    
-    flash(f'User "{user.username}" has been removed.', 'info')
-    return redirect(url_for('admin_dashboard'))
-
-# -----------------------------------------------------------------------------
-# USER DASHBOARD & TRIP ROUTES
-# -----------------------------------------------------------------------------
-@app.route('/user')
-@login_required
-def user_dashboard():
-    active_trips = TripLog.query.filter_by(user_id=current_user.id, status='active').all()
-    available_cars = Car.query.filter_by(status='available').all()
-    return render_template('user_dashboard.html', active_trips=active_trips, available_cars=available_cars)
-
-@app.route('/checkout/<int:car_id>', methods=['POST'])
-@login_required
-def checkout_car(car_id):
-    car = Car.query.get_or_404(car_id)
-    start_km = int(request.form.get('start_km', car.current_km))
-    notes = request.form.get('destination_notes', '')  # <-- Captures destination comment
-
-    if car.status != 'available':
-        flash('This car is currently unavailable.', 'danger')
-        return redirect(url_for('user_dashboard'))
-
-    trip = TripLog(
-        user_id=current_user.id,
-        car_id=car.id,
-        start_km=start_km,
-        destination_notes=notes,  # <-- Saves destination comment
-        start_time=get_local_time()
-    )
-    
-    car.status = 'in_use'
-    car.current_km = start_km
-    
-    db.session.add(trip)
-    db.session.commit()
-    flash(f'Vehicle {car.make_model} successfully checked out.', 'success')
-    return redirect(url_for('user_dashboard'))
-
-@app.route('/user/return/<int:trip_id>', methods=['POST'])
-@login_required
-def return_car(trip_id):
-    trip = TripLog.query.get_or_404(trip_id)
-    if trip.user_id != current_user.id:
-        flash('Unauthorized action.', 'danger')
-        return redirect(url_for('user_dashboard'))
-
-    end_km = request.form.get('end_km', type=int)
-    receipt = request.files.get('receipt_image')
-
-    if not end_km or end_km < trip.start_km:
-        flash('Return KM must be greater than or equal to start KM.', 'warning')
-        return redirect(url_for('user_dashboard'))
-
-    filename = None
-    if receipt and receipt.filename != '':
-        filename = f"receipt_{trip.id}_{secure_filename(receipt.filename)}"
-        receipt.save(os.path.join(app.config['RECEIPT_FOLDER'], filename))
-
-    trip.end_km = end_km
-    trip.end_time = get_local_time()
-    trip.receipt_image = filename
-    trip.status = 'completed'
-
-    # Update car status and current KM
-    car = Car.query.get(trip.car_id)
-    car.current_km = end_km
-    car.status = 'available'
-
-    db.session.commit()
-    flash('Vehicle returned successfully.', 'success')
-    return redirect(url_for('user_dashboard'))
-
-# -----------------------------------------------------------------------------
-# REPORT GENERATION ROUTES
-# -----------------------------------------------------------------------------
-@app.route('/admin/export/car/csv/<int:car_id>')
-@login_required
-def export_car_csv(car_id):
-    if current_user.role != 'admin':
-        return "Unauthorized", 403
-
-    car = Car.query.get_or_404(car_id)
-    logs = db.session.query(TripLog, User)\
-        .join(User, TripLog.user_id == User.id)\
-        .filter(TripLog.car_id == car_id).all()
-
-    data = []
-    for log, user in logs:
-        data.append({
-            "User": f"{user.first_name} {user.last_name}",
-            "Username": user.username,
-            "Car": car.make_model,
-            "Plate": car.plate_number,
-            "Destination/Notes": log.destination_notes or "N/A",
-            "Start Time": log.start_time.strftime('%Y-%m-%d %H:%M:%S') if log.start_time else "",
-            "End Time": log.end_time.strftime('%Y-%m-%d %H:%M:%S') if log.end_time else "In Progress",
-            "Start KM": log.start_km,
-            "End KM": log.end_km if log.end_km else "N/A",
-            "Distance (KM)": (log.end_km - log.start_km) if log.end_km else "N/A"
+        enriched_items.append({
+            'obj': item,
+            'entrance_date': entrance_tx.timestamp.strftime('%Y-%m-%d %H:%M') if entrance_tx else '-',
+            'exit_date': exit_tx.timestamp.strftime('%Y-%m-%d %H:%M') if (exit_tx and item.status == 'EXITED') else '-',
+            'latest_comment': latest_tx.comment if (latest_tx and latest_tx.comment) else '-',
+            'attachment': latest_tx.attachment if (latest_tx and latest_tx.attachment) else None
         })
 
-    df = pd.DataFrame(data)
-    os.makedirs('exports', exist_ok=True)
-    filename = f"exports/car_{car_id}_report.csv"
-    df.to_csv(filename, index=False)
-    return send_file(filename, as_attachment=True)
+    all_categories = Category.query.all()
+    all_properties = PropertyClient.query.all()
+    all_transactions = Transaction.query.order_by(Transaction.timestamp.desc()).all()
 
-@app.route('/admin/export/car/html/<int:car_id>')
+    return render_template(
+        'report.html', 
+        items=enriched_items, 
+        categories=all_categories, 
+        properties=all_properties, 
+        transactions=all_transactions,
+        selected_model=selected_model,
+        selected_property=selected_property,
+        search_query=search_query
+    )
+
+@app.route('/item_history/<int:item_id>')
 @login_required
-def view_car_html_report(car_id):
-    if current_user.role != 'admin':
-        return "Unauthorized", 403
-
-    car = Car.query.get_or_404(car_id)
+def item_history(item_id):
+    item = Item.query.get_or_404(item_id)
+    tx_list = Transaction.query.filter_by(item_id=item.id).order_by(Transaction.timestamp.desc()).all()
     
-    # Get selected month and year from query parameters (default to current local date if not specified)
-    selected_month = request.args.get('month', type=int)
-    selected_year = request.args.get('year', type=int)
+    history_data = []
+    for tx in tx_list:
+        history_data.append({
+            'timestamp': tx.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            'action': tx.action,
+            'user': tx.user.username if tx.user else 'System',
+            'comment': tx.comment or '-',
+            'attachment': tx.attachment or None
+        })
 
-    # Base query for trip logs
-    query = db.session.query(TripLog, User)\
-        .join(User, TripLog.user_id == User.id)\
-        .filter(TripLog.car_id == car_id)
+    return jsonify({
+        'serial_number': item.serial_number,
+        'model': f"{item.category_rel.vendor} {item.category_rel.model}",
+        'history': history_data
+    })
 
-    # Apply year filter if present
-    if selected_year:
-        query = query.filter(extract('year', TripLog.start_time) == selected_year)
+@app.route('/manage', methods=['GET', 'POST'])
+@login_required
+def manage_metadata():
+    if request.method == 'POST':
+        form_type = request.form.get('form_type')
+        
+        if form_type == 'category':
+            name = request.form.get('name', '').strip()
+            vendor = request.form.get('vendor', '').strip()
+            model = request.form.get('model', '').strip()
+            if name and vendor and model:
+                db.session.add(Category(name=name, vendor=vendor, model=model))
+                db.session.commit()
+                flash('Category added successfully!')
 
-    # Apply month filter if present
-    if selected_month:
-        query = query.filter(extract('month', TripLog.start_time) == selected_month)
+        elif form_type == 'property':
+            prop_name = request.form.get('property_name', '').strip()
+            if prop_name:
+                if not PropertyClient.query.filter_by(name=prop_name).first():
+                    db.session.add(PropertyClient(name=prop_name))
+                    db.session.commit()
+                    flash('Property / Client added successfully!')
 
-    logs = query.order_by(TripLog.start_time.desc()).all()
+        elif form_type == 'user':
+            username = request.form.get('username', '').strip()
+            password = request.form.get('password', '').strip()
+            if username and password:
+                if not User.query.filter_by(username=username).first():
+                    db.session.add(User(username=username, password=generate_password_hash(password)))
+                    db.session.commit()
+                    flash(f'User "{username}" created successfully!')
 
-    html_template = """
-    {% extends "base.html" %}
-    {% block content %}
-    <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-3 gap-2">
-        <h4 class="mb-0">Report for {{ car.make_model }} ({{ car.plate_number }})</h4>
-        <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary btn-sm">Back to Dashboard</a>
-    </div>
+        return redirect(url_for('manage_metadata'))
 
-    <!-- Date Filter Bar -->
-    <div class="card shadow-sm mb-3">
-        <div class="card-body p-3">
-            <form method="GET" action="{{ url_for('view_car_html_report', car_id=car.id) }}" class="row g-2 align-items-center">
-                <div class="col-12 col-md-4">
-                    <label class="form-label small fw-bold mb-1">Month</label>
-                    <select name="month" class="form-select form-select-sm">
-                        <option value="">All Months</option>
-                        {% for m in range(1, 13) %}
-                        <option value="{{ m }}" {% if selected_month == m %}selected{% endif %}>
-                            {{ ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][m-1] }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-12 col-md-4">
-                    <label class="form-label small fw-bold mb-1">Year</label>
-                    <select name="year" class="form-select form-select-sm">
-                        <option value="">All Years</option>
-                        {% for y in range(2026, 2036) %}
-                        <option value="{{ y }}" {% if selected_year == y %}selected{% endif %}>{{ y }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-12 col-md-4 d-flex gap-2 mt-md-4">
-                    <button type="submit" class="btn btn-dark btn-sm w-100">Filter Report</button>
-                    <a href="{{ url_for('view_car_html_report', car_id=car.id) }}" class="btn btn-outline-secondary btn-sm w-100">Reset</a>
-                </div>
-            </form>
-        </div>
-    </div>
+    categories = Category.query.all()
+    properties = PropertyClient.query.all()
+    users = User.query.all()
+    return render_template('manage_metadata.html', categories=categories, properties=properties, users=users)
 
-    <!-- Report Table -->
-    <div class="card shadow-sm">
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-striped align-middle mb-0 text-nowrap">
-                    <thead class="table-dark">
-                        <tr>
-                            <th>Driver</th>
-                            <th>Destination / Notes</th>
-                            <th>Start Time</th>
-                            <th>End Time</th>
-                            <th>Start KM</th>
-                            <th>End KM</th>
-                            <th>Distance</th>
-                            <th>Receipt / Bill</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for log, user in logs %}
-                        <tr>
-                            <td>{{ user.first_name }} {{ user.last_name }}</td>
-                            <td><span class="badge bg-info text-dark">{{ log.destination_notes or 'N/A' }}</span></td>
-                            <td>{{ log.start_time.strftime('%Y-%m-%d %H:%M') if log.start_time }}</td>
-                            <td>{{ log.end_time.strftime('%Y-%m-%d %H:%M') if log.end_time else 'In Progress' }}</td>
-                            <td>{{ log.start_km }} km</td>
-                            <td>{{ log.end_km ~ ' km' if log.end_km else 'N/A' }}</td>
-                            <td>{{ (log.end_km - log.start_km) ~ ' km' if log.end_km else 'N/A' }}</td>
-                            <td>
-                                {% if log.receipt_image %}
-                                <a href="{{ url_for('static', filename='receipt_images/' ~ log.receipt_image) }}" target="_blank" class="btn btn-outline-dark btn-sm">
-                                    View Receipt
-                                </a>
-                                {% else %}
-                                <span class="text-muted small">No Receipt</span>
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% else %}
-                        <tr>
-                            <td colspan="8" class="text-center py-3 text-muted">No trip logs found for the selected period.</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-    {% endblock %}
-    """
-    return render_template_string(html_template, car=car, logs=logs, selected_month=selected_month, selected_year=selected_year)
+@app.route('/reenter_item/<int:item_id>', methods=['POST'])
+@login_required
+def reenter_item(item_id):
+    item = Item.query.get_or_404(item_id)
+    comment = request.form.get('comment', 'Re-entered into warehouse stock').strip()
 
-# -----------------------------------------------------------------------------
-# APP INITIALIZATION & DEFAULT SEED DATA
-# -----------------------------------------------------------------------------
-def init_db():
-    with app.app_context():
-        db.create_all()
-        if not User.query.filter_by(username='admin').first():
-            hashed_admin_pw = generate_password_hash('admin123', method='scrypt')
-            admin_user = User(
-                username='admin',
-                password=hashed_admin_pw,
-                first_name='System',
-                last_name='Admin',
-                role='admin'
-            )
-            db.session.add(admin_user)
+    item.status = 'IN_STOCK'
+    new_tx = Transaction(
+        item_id=item.id,
+        user_id=current_user.id,
+        action='ENTRANCE',
+        comment=comment
+    )
+    db.session.add(new_tx)
+    db.session.commit()
+
+    flash(f'Item {item.serial_number} successfully re-entered into inventory stock!')
+    return redirect(url_for('report'))
+
+@app.route('/bulk_action', methods=['POST'])
+@login_required
+def bulk_action():
+    item_ids = request.form.getlist('selected_items')
+    action = request.form.get('action')
+    comment = request.form.get('comment', '').strip()
+
+    if not item_ids:
+        flash('Warning: No items were selected!')
+        return redirect(url_for('report'))
+
+    updated_count = 0
+    for item_id in item_ids:
+        if not item_id.isdigit():
+            continue
+            
+        item = Item.query.get(int(item_id))
+        if not item:
+            continue
+
+        if action == 'EXIT':
+            if item.status != 'EXITED':
+                item.status = 'EXITED'
+                db.session.add(Transaction(item_id=item.id, user_id=current_user.id, action='EXIT', comment=comment or 'Bulk exit from Report page'))
+                updated_count += 1
+
+        elif action == 'UPDATE_COMMENT':
+            if comment:
+                latest_tx = Transaction.query.filter_by(item_id=item.id).order_by(Transaction.timestamp.desc()).first()
+                if latest_tx:
+                    latest_tx.comment = comment
+                else:
+                    db.session.add(Transaction(item_id=item.id, user_id=current_user.id, action=item.status, comment=comment))
+                updated_count += 1
+
+        elif action == 'DELETE':
+            Transaction.query.filter_by(item_id=item.id).delete()
+            db.session.delete(item)
+            updated_count += 1
+
+    db.session.commit()
+    flash(f'Successfully processed bulk {action} on {updated_count} selected item(s)!')
+    return redirect(url_for('report'))
+
+@app.route('/quick_exit/<int:item_id>', methods=['POST'])
+@login_required
+def quick_exit(item_id):
+    item = Item.query.get_or_404(item_id)
+    comment = request.form.get('comment', '').strip()
+    item.status = 'EXITED'
+    db.session.add(Transaction(item_id=item.id, user_id=current_user.id, action='EXIT', comment=comment or 'Quick Exit from Report page'))
+    db.session.commit()
+    flash(f'Device {item.serial_number} marked as EXITED.')
+    return redirect(url_for('report'))
+
+@app.route('/edit_item/<int:item_id>', methods=['POST'])
+@login_required
+def edit_item(item_id):
+    item = Item.query.get_or_404(item_id)
+    new_serial = request.form.get('serial_number', '').strip()
+    category_id = request.form.get('category_id')
+    property_id = request.form.get('property_id')
+    status = request.form.get('status')
+    comment = request.form.get('comment', '').strip()
+    custom_time_str = request.form.get('custom_timestamp')
+
+    if new_serial and new_serial != item.serial_number:
+        if Item.query.filter_by(serial_number=new_serial).first():
+            flash(f'Error: Serial number {new_serial} already exists!')
+            return redirect(url_for('report'))
+        item.serial_number = new_serial
+
+    if category_id and category_id.isdigit():
+        item.category_id = int(category_id)
+
+    item.property_id = int(property_id) if (property_id and property_id.isdigit()) else None
+    item.status = status
+
+    latest_tx = Transaction.query.filter_by(item_id=item.id).order_by(Transaction.timestamp.desc()).first()
+    if latest_tx:
+        if comment:
+            latest_tx.comment = comment
+        if custom_time_str:
+            try:
+                latest_tx.timestamp = datetime.strptime(custom_time_str, '%Y-%m-%dT%H:%M')
+            except ValueError:
+                pass
+
+    db.session.commit()
+    flash(f'Device details for {item.serial_number} updated successfully!')
+    return redirect(url_for('report'))
+
+@app.route('/delete_item/<int:item_id>', methods=['POST'])
+@login_required
+def delete_item(item_id):
+    item = Item.query.get_or_404(item_id)
+    serial = item.serial_number
+    Transaction.query.filter_by(item_id=item.id).delete()
+    db.session.delete(item)
+    db.session.commit()
+    flash(f'Item {serial} deleted permanently.')
+    return redirect(url_for('report'))
+
+@app.route('/bulk_import', methods=['GET', 'POST'])
+@login_required
+def bulk_import():
+    if request.method == 'POST':
+        category_id = request.form.get('category_id')
+        property_id = request.form.get('property_id')
+        batch_comment = request.form.get('comment', '').strip()
+        file = request.files.get('file')
+        attachment_file = request.files.get('attachment')
+
+        if not file:
+            flash('Error: Serial list file (.txt, .csv, .xlsx) is required!')
+            return redirect(url_for('bulk_import'))
+
+        # Save optional invoice / factor attachment
+        uploaded_attachment = save_attachment(attachment_file)
+
+        filename = file.filename.lower()
+        serials = []
+
+        try:
+            if filename.endswith('.csv') or filename.endswith('.txt'):
+                df = pd.read_csv(file, header=None)
+                serials = df[0].dropna().astype(str).str.strip().tolist()
+            elif filename.endswith('.xlsx') or filename.endswith('.xls'):
+                df = pd.read_excel(file, header=None)
+                serials = df[0].dropna().astype(str).str.strip().tolist()
+            else:
+                flash('Unsupported file format!')
+                return redirect(url_for('bulk_import'))
+        except Exception as e:
+            flash(f'Error processing serial list file: {str(e)}')
+            return redirect(url_for('bulk_import'))
+
+        imported_count = 0
+        for sn in serials:
+            if not sn or sn.lower() in ['serial number', 'sn', 'serial']:
+                continue
+
+            item = Item.query.filter_by(serial_number=sn).first()
+            cat_id_to_use = int(category_id) if (category_id and category_id.isdigit()) else None
+
+            if not item:
+                if not cat_id_to_use:
+                    first_cat = Category.query.first()
+                    cat_id_to_use = first_cat.id if first_cat else 1
+
+                item = Item(serial_number=sn, category_id=cat_id_to_use, status='IN_STOCK')
+                if property_id and property_id.isdigit():
+                    item.property_id = int(property_id)
+                db.session.add(item)
+                db.session.flush()
+            else:
+                item.status = 'IN_STOCK'
+                if property_id and property_id.isdigit():
+                    item.property_id = int(property_id)
+
+            # Record movement transaction with attached invoice/factor
+            db.session.add(Transaction(
+                item_id=item.id,
+                user_id=current_user.id,
+                action='ENTRANCE',
+                comment=batch_comment or 'Bulk File Import',
+                attachment=uploaded_attachment
+            ))
+            imported_count += 1
+
+        db.session.commit()
+        flash(f'Successfully processed bulk import for {imported_count} serials!')
+        return redirect(url_for('report'))
+
+    categories = Category.query.all()
+    properties = PropertyClient.query.all()
+    return render_template('bulk_import.html', categories=categories, properties=properties)
+
+@app.route('/edit_category/<int:cat_id>', methods=['POST'])
+@login_required
+def edit_category(cat_id):
+    cat = Category.query.get_or_404(cat_id)
+    name = request.form.get('name', '').strip()
+    vendor = request.form.get('vendor', '').strip()
+    model = request.form.get('model', '').strip()
+
+    if name and vendor and model:
+        cat.name = name
+        cat.vendor = vendor
+        cat.model = model
+        db.session.commit()
+        flash(f'Category "{vendor} {model}" updated successfully!')
+    else:
+        flash('Error: All category fields are required!')
+
+    return redirect(url_for('manage_metadata'))
+
+@app.route('/edit_property/<int:prop_id>', methods=['POST'])
+@login_required
+def edit_property(prop_id):
+    prop = PropertyClient.query.get_or_404(prop_id)
+    new_name = request.form.get('property_name', '').strip()
+
+    if new_name:
+        existing = PropertyClient.query.filter_by(name=new_name).first()
+        if existing and existing.id != prop_id:
+            flash(f'Error: Property/Client "{new_name}" already exists!')
+        else:
+            prop.name = new_name
             db.session.commit()
-            print("Default admin created: Username: nec_admin | Password: xxxxxx")
+            flash(f'Property/Client updated to "{new_name}"!')
+    else:
+        flash('Error: Property name cannot be empty!')
+
+    return redirect(url_for('manage_metadata'))
+
+
+@app.route('/change_user_password/<int:user_id>', methods=['POST'])
+@login_required
+def change_user_password(user_id):
+    target_user = User.query.get_or_404(user_id)
+    new_password = request.form.get('new_password', '').strip()
+
+    if new_password:
+        target_user.password = generate_password_hash(new_password)
+        db.session.commit()
+        flash(f'Password for user "{target_user.username}" updated successfully!')
+    else:
+        flash('Error: Password cannot be empty!')
+
+    return redirect(url_for('manage_metadata'))
 
 if __name__ == '__main__':
-    init_db()
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000, debug=True)
