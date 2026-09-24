@@ -2,142 +2,42 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Fleet Management</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Warehouse Manager</title>
     <style>
-        body { font-size: 0.95rem; }
-        .table-responsive { max-width: 100%; overflow-x: auto; }
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 12px; background: #f4f6f8; }
+        nav { display: flex; flex-wrap: wrap; gap: 8px; background: #333; padding: 10px; border-radius: 6px; margin-bottom: 15px; }
+        nav a { color: #fff; text-decoration: none; padding: 6px 10px; background: #444; border-radius: 4px; font-size: 14px; }
+        nav a.logout { background: #dc3545; margin-left: auto; }
+        .card { background: #fff; padding: 16px; border-radius: 8px; width: 100%; max-width: 600px; margin: 0 auto 15px auto; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        input, select, textarea, button { width: 100%; padding: 12px; font-size: 16px; margin-top: 5px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 6px; }
+        button { background: #007bff; color: white; font-weight: bold; border: none; cursor: pointer; }
+        .table-container { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; background: #fff; font-size: 14px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #007bff; color: white; }
+        .alert { padding: 10px; background: #d4edda; color: #155724; border-radius: 4px; margin-bottom: 12px; }
     </style>
 </head>
-<body class="bg-light">
-    <nav class="navbar navbar-expand-md navbar-dark bg-dark mb-3 px-3">
-        <div class="container-fluid">
-            <a class="navbar-brand fw-bold" href="#">Fleet Manager</a>
-            
-            <div class="d-flex align-items-center gap-2">
-                <!-- Language Selector -->
-                <select id="langSelect" class="form-select form-select-sm bg-secondary text-white border-0" style="width: auto;">
-                    <option value="en">🇬🇧 EN</option>
-                    <option value="it">🇮🇹 IT</option>
-                </select>
-
-                {% if current_user.is_authenticated %}
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
-                    <span class="navbar-toggler-icon"></span>
-                </button>
-                {% endif %}
-            </div>
-
-            {% if current_user.is_authenticated %}
-            <div class="collapse navbar-collapse" id="navMenu">
-                <div class="ms-auto d-flex flex-column flex-md-row align-items-md-center gap-2 mt-2 mt-md-0">
-                    <span class="text-white small me-md-2">
-                        <span data-i18n="welcome">Welcome</span>, <strong>{{ current_user.first_name }}</strong> ({{ current_user.role|capitalize }})
-                    </span>
-                    <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm w-100 w-md-auto" data-i18n="logout">Logout</a>
-                </div>
-            </div>
-            {% endif %}
-        </div>
+<body>
+    {% if current_user.is_authenticated %}
+    <nav>
+      <a href="{{ url_for('index') }}">Dashboard</a>
+      <a href="{{ url_for('transaction') }}">Scan In/Out</a>
+      <a href="{{ url_for('bulk_import') }}">Bulk Import</a>
+      <a href="{{ url_for('manage_metadata') }}">Add Category</a>
+      <a href="{{ url_for('report') }}">Reports</a>
+      <a href="{{ url_for('logout') }}" class="logout">Logout</a>
     </nav>
-
-    <div class="container-fluid px-2 px-md-4">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }} alert-dismissible fade show my-2" role="alert">
-                        {{ message }}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-
-        {% block content %}{% endblock %}
-    </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-
-    <!-- TRANSLATION SCRIPT -->
-    <script>
-        const translations = {
-            en: {
-                "welcome": "Welcome",
-                "logout": "Logout",
-                "driver_portal": "Driver Portal",
-                "active_returns": "Active Returns",
-                "return_vehicle": "Return Vehicle",
-                "available_vehicles": "Available Vehicles",
-                "check_out": "Check Out",
-                "where_going": "Where are you going?",
-                "start_km": "Start KM",
-                "return_odometer": "Return Odometer (KM)",
-                "admin_dashboard": "Admin Dashboard",
-                "add_user": "Add New User",
-                "add_vehicle": "Add New Vehicle",
-                "register_user": "Register User",
-                "add_to_fleet": "Add Vehicle to Fleet",
-                "fleet_reports": "Vehicle Fleet & Export Reports",
-                "no_vehicles": "No vehicles available.",
-                "user_management": "User Management",
-                "name": "Name",
-                "role": "Role",
-                "change_password": "Change Password"i,
-                "edit": "Edit",
-                "assign": "Assign"
-            },
-            it: {
-                "welcome": "Benvenuto",
-                "logout": "Disconnetti",
-                "driver_portal": "Portale Conducente",
-                "active_returns": "Veicoli da Restituire",
-                "return_vehicle": "Restituisci Veicolo",
-                "available_vehicles": "Veicoli Disponibili",
-                "check_out": "Prendi in Consegna",
-                "where_going": "Dove stai andando?",
-                "start_km": "KM Iniziali",
-                "return_odometer": "Chilometraggio di Rientro (KM)",
-                "admin_dashboard": "Pannello Amministratore",
-                "add_user": "Aggiungi Nuovo Utente",
-                "add_vehicle": "Aggiungi Nuovo Veicolo",
-                "register_user": "Registra Utente",
-                "add_to_fleet": "Aggiungi Veicolo alla Flotta",
-                "fleet_reports": "Flotta Veicoli e Report Export",
-                "no_vehicles": "Nessun veicolo disponibile.",
-                "user_management": "Gestione Utenti",
-                "name": "Nome",
-                "role": "Ruolo",
-                "change_password": "Cambia Password",
-                "edit": "Modifica",
-                "assign": "Assegna"
-            }
-        };
-
-        function setLanguage(lang) {
-            localStorage.setItem('selectedLanguage', lang);
-            document.querySelectorAll('[data-i18n]').forEach(el => {
-                const key = el.getAttribute('data-i18n');
-                if (translations[lang] && translations[lang][key]) {
-                    el.innerText = translations[lang][key];
-                }
-            });
-            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-                const key = el.getAttribute('data-i18n-placeholder');
-                if (translations[lang] && translations[lang][key]) {
-                    el.placeholder = translations[lang][key];
-                }
-            });
-        }
-
-        document.getElementById('langSelect').addEventListener('change', (e) => {
-            setLanguage(e.target.value);
-        });
-
-        // Load saved language or default to English
-        const savedLang = localStorage.getItem('selectedLanguage') || 'en';
-        document.getElementById('langSelect').value = savedLang;
-        setLanguage(savedLang);
-    </script>
+    {% endif %}
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for message in messages %}
+          <div class="alert">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
 </body>
 </html>
